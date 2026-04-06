@@ -235,6 +235,12 @@ export default function Detection() {
         }
       }
 
+      if (!detectionRow) {
+        toast.error('The scan finished, but no result payload was returned. Please retry.', 'No Result Returned')
+        setAnalyzing(false)
+        return
+      }
+
       const isAttack = detectionRow.verdict === 'ATTACK'
       if (isAttack) {
         toast.error(

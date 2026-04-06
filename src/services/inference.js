@@ -1,13 +1,16 @@
 import * as ort from 'onnxruntime-web';
 
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
+
 let onnxSession = null;
 let scalerSession = null;
 
 export async function loadMLModels() {
   try {
     // In a web environment, load models from public folder
-    const modelCandidates = ['/ids_random_forest.onnx', '/ids_random_forest_model.onnx'];
-    const scalerCandidates = ['/scaler.onnx', '/data_scaler.onnx'];
+    const base = (import.meta?.env?.BASE_URL || '/').replace(/\/$/, '');
+    const modelCandidates = [`${base}/ids_random_forest.onnx`, `${base}/ids_random_forest_model.onnx`, '/ids_random_forest.onnx', '/ids_random_forest_model.onnx'];
+    const scalerCandidates = [`${base}/scaler.onnx`, `${base}/data_scaler.onnx`, '/scaler.onnx', '/data_scaler.onnx'];
 
     if (!onnxSession) {
       for (const path of modelCandidates) {
