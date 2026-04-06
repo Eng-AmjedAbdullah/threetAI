@@ -1,14 +1,11 @@
 import * as ort from 'onnxruntime-web';
 
-// Force stable wasm asset location for Firebase Hosting / SPA deployments.
+// Stable wasm path for Firebase Hosting / SPA deployments.
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
 
 let onnxSession = null;
 let scalerSession = null;
 
-/**
- * Build candidate URLs that work both at root and under sub-path hosting.
- */
 function buildCandidates(basePath, names) {
   const cleanedBase = (basePath || '/').replace(/\/$/, '');
   const baseCandidates = names.map((n) => `${cleanedBase}/${n}`);
@@ -16,9 +13,6 @@ function buildCandidates(basePath, names) {
   return [...new Set([...baseCandidates, ...rootCandidates])];
 }
 
-/**
- * Best-effort model load for Hosting + local.
- */
 export async function loadMLModels() {
   try {
     const base = import.meta?.env?.BASE_URL || '/';
@@ -36,9 +30,7 @@ export async function loadMLModels() {
     if (!onnxSession) {
       for (const path of modelCandidates) {
         try {
-          onnxSession = await ort.InferenceSession.create(path, {
-            executionProviders: ['wasm']
-          });
+          onnxSession = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
           console.log(`✅ Main model loaded from ${path}`);
           break;
         } catch (err) {
@@ -50,9 +42,7 @@ export async function loadMLModels() {
     if (!scalerSession) {
       for (const path of scalerCandidates) {
         try {
-          scalerSession = await ort.InferenceSession.create(path, {
-            executionProviders: ['wasm']
-          });
+          scalerSession = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
           console.log(`✅ Scaler model loaded from ${path}`);
           break;
         } catch (err) {
@@ -70,7 +60,7 @@ export async function loadMLModels() {
     return true;
   } catch (err) {
     console.error('❌ Error in model loading process:', err);
-    return true; // do not block page load
+    return true;
   }
 }
 
@@ -92,68 +82,45 @@ function isTypedArray(value) {
 function extractTensorValues(value) {
   if (value == null) return [];
 
-  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
-    return [value];
-  }
+  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => extractTensorValues(v));
+  if (isTypedArray(value)) return Array.from(value);
 
-  if (Array.isArray(value)) {
-    return value.flatMap((v) => extractTensorValues(v));
-  }
+  if (typeof value === 'object') {
+    // ORT tensor happy-path
+    if (value.cpuData && isTypedArray(value.cpuData)) {
+      return Array.from(value.cpuData);
+    }
 
-  if (isTypedArray(value)) {
-    return Array.from(value);
-  }
-
-  const tryExtract = (candidate) => {
-    if (candidate == null) return undefined;
-
-    if (isTypedArray(candidate)) return Array.from(candidate);
-    if (Array.isArray(candidate)) return candidate;
-
-    if (typeof candidate === 'object') {
-      if (candidate.cpuData && isTypedArray(candidate.cpuData)) return Array.from(candidate.cpuData);
-
-      if (candidate.data) {
-        try {
-          const dataValue = candidate.data;
-          if (isTypedArray(dataValue)) return Array.from(dataValue);
-          if (Array.isArray(dataValue)) return dataValue;
-        } catch {
-          // some runtimes can throw on .data
-        }
-      }
-
-      if (candidate.value !== undefined) {
-        return tryExtract(candidate.value);
-      }
-
-      if (typeof candidate.toArray === 'function') {
-        try {
-          return candidate.toArray();
-        } catch {
-          // ignore
-        }
-      }
-
-      if (typeof candidate[Symbol.iterator] === 'function') {
-        try {
-          return Array.from(candidate);
-        } catch {
-          // ignore
-        }
+    // Some tensor-like objects expose .data
+    if (Object.prototype.hasOwnProperty.call(value, 'data')) {
+      try {
+        const d = value.data;
+        if (isTypedArray(d)) return Array.from(d);
+        if (Array.isArray(d)) return d.flatMap((v) => extractTensorValues(v));
+      } catch {
+        // ignore non-tensor access errors
       }
     }
 
-    return undefined;
-  };
+    // Wrapped value
+    if (Object.prototype.hasOwnProperty.call(value, 'value')) {
+      return extractTensorValues(value.value);
+    }
 
-  const extracted = tryExtract(value);
-  return extracted || [value];
+    // Plain object / map-like
+    const keys = Object.keys(value);
+    if (keys.length) {
+      return keys.flatMap((k) => extractTensorValues(value[k]));
+    }
+  }
+
+  return [];
 }
 
 function normalizeTensorValues(value) {
   const values = extractTensorValues(value);
-  if (!values || !values.length) return [];
+  if (!values.length) return [];
   return values.map((v) => (typeof v === 'string' ? v.trim() : v));
 }
 
@@ -164,16 +131,13 @@ function normalizeLabel(value) {
     const normalized = value.trim().toUpperCase();
     if (normalized === 'ATTACK') return 'ATTACK';
     if (normalized === 'NORMAL') return 'NORMAL';
-
-    const numeric = Number(normalized);
-    if (!Number.isNaN(numeric)) return numeric === 1 ? 'ATTACK' : 'NORMAL';
-
+    const n = Number(normalized);
+    if (!Number.isNaN(n)) return n === 1 ? 'ATTACK' : 'NORMAL';
     return 'NORMAL';
   }
 
   if (typeof value === 'number') return value === 1 ? 'ATTACK' : 'NORMAL';
   if (typeof value === 'boolean') return value ? 'ATTACK' : 'NORMAL';
-
   return 'NORMAL';
 }
 
@@ -183,32 +147,23 @@ function clamp01(x) {
   return Math.min(1, Math.max(0, n));
 }
 
-/**
- * Converts various probability formats into normalized [normalProb, attackProb]
- * Supports:
- * - [normal, attack]
- * - [attack]
- * - object-like flattened arrays
- */
 function resolveProbabilities(values = []) {
   const nums = values.map(Number).filter((v) => !Number.isNaN(v));
 
   if (!nums.length) return { normalProb: 0.5, attackProb: 0.5, fromProb: false };
 
   if (nums.length >= 2) {
-    const normalProb = clamp01(nums[0]);
-    const attackProb = clamp01(nums[1]);
-    return { normalProb, attackProb, fromProb: true };
+    return {
+      normalProb: clamp01(nums[0]),
+      attackProb: clamp01(nums[1]),
+      fromProb: true
+    };
   }
 
-  // single score -> treat as attack score
   const attackProb = clamp01(nums[0]);
   return { normalProb: clamp01(1 - attackProb), attackProb, fromProb: true };
 }
 
-/**
- * Main inference
- */
 export async function runThreatGuardInference(features) {
   if (!onnxSession || !scalerSession) {
     throw new Error('ML models are not loaded. Please ensure the scaler and model ONNX files are available.');
@@ -227,7 +182,7 @@ export async function runThreatGuardInference(features) {
   const inputData = featureOrder.map((name) => parseFloat(features?.[name]) || 0);
   const inputTensor = new ort.Tensor('float32', new Float32Array(inputData), [1, inputData.length]);
 
-  // Scale
+  // 1) Scale
   const scalerFeeds = { [scalerSession.inputNames[0]]: inputTensor };
   const scaledOutput = await scalerSession.run(scalerFeeds);
   const scaledTensor = getTensorOutput(scaledOutput, [scalerSession.outputNames[0]]);
@@ -236,20 +191,21 @@ export async function runThreatGuardInference(features) {
     throw new Error('Scaler model failed to produce valid output tensor.');
   }
 
-  // Predict
+  // 2) Model
   const modelFeeds = { [onnxSession.inputNames[0]]: scaledTensor };
   const modelOutput = await onnxSession.run(modelFeeds);
 
+  // label candidates
   const labelOutput = getTensorOutput(modelOutput, [
     'label',
     'output_label',
     ...onnxSession.outputNames
   ]);
 
+  // NOTE: do not assume outputNames[1] is tensor; use all safely
   const probOutput = getTensorOutput(modelOutput, [
     'probabilities',
     'output_probability',
-    ...onnxSession.outputNames.slice(1),
     ...onnxSession.outputNames
   ]);
 
@@ -263,16 +219,13 @@ export async function runThreatGuardInference(features) {
     const labelValue = normalizeTensorValues(labelOutput)[0];
     verdict = normalizeLabel(labelValue);
 
-    // if probabilities exist, confidence tracks predicted class
     if (fromProb) {
       confidence = verdict === 'ATTACK' ? attackProb : normalProb;
     }
   } else if (fromProb) {
-    // fallback label from probabilities
     verdict = attackProb >= normalProb ? 'ATTACK' : 'NORMAL';
     confidence = Math.max(normalProb, attackProb);
   } else {
-    // final fallback: never crash scan because of output schema mismatch
     console.warn('⚠️ Model outputs did not include label/probabilities in expected format; using safe fallback verdict.');
     verdict = 'NORMAL';
     confidence = 0.6;
