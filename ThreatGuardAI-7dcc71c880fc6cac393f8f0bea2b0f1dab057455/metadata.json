@@ -1,0 +1,5 @@
+{
+  "name": "ThreatGuardAI",
+  "description": "Advanced AI-powered network intrusion detection system with real-time scanning, threat history, and developer API access.",
+  "requestFramePermissions": []
+}

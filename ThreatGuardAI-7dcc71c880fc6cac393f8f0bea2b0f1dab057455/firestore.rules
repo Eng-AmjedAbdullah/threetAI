@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches Firebase Auth UID)
+    // Fields:
+    //   - fullName: string (required)
+    //   - email: string (required, format: email)
+    //   - role: string (required, enum: ['user', 'admin'])
+    //   - createdAt: timestamp (required)
+    //   - updatedAt: timestamp (optional)
+    //
+    // Collection: detections
+    // Document ID: {detectionId} (auto-generated)
+    // Fields:
+    //   - userId: string (required, matches owner UID)
+    //   - verdict: string (required, enum: ['ATTACK', 'NORMAL'])
+    //   - confidence: number (required)
+    //   - inputMode: string (optional)
+    //   - topFeaturesJson: string (optional)
+    //   - features: map (optional)
+    //   - createdAt: timestamp (required)
+    //   - engine: string (optional)
+    //   - filename: string (optional)
+    //   - totalRecords: number (optional)
+    //   - attackCount: number (optional)
+    //   - normalCount: number (optional)
+    //
+    // Collection: apiKeys
+    // Document ID: {keyId} (auto-generated)
+    // Fields:
+    //   - userId: string (required, matches owner UID)
+    //   - keyName: string (required)
+    //   - apiKey: string (required)
+    //   - createdAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "projectahadpsa@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() < 100 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidDetection(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.verdict in ['ATTACK', 'NORMAL'] &&
+             data.confidence is number && data.confidence >= 0 && data.confidence <= 1 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidApiKey(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.keyName is string && data.keyName.size() > 0 && data.keyName.size() < 50 &&
+             data.apiKey is string &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Only allow users to create their own profile with 'user' role, unless admin
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    ((isOwner(userId) && request.resource.data.role == 'user') || isAdmin());
+      
+      // Only allow users to update their own profile, but NOT their role, unless admin
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    ((isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /detections/{detectionId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidDetection(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidDetection(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /apiKeys/{keyId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidApiKey(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidApiKey(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+    
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

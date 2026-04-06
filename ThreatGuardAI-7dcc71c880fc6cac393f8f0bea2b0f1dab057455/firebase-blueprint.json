@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fullName", "email", "role", "createdAt"]
+    },
+    "Detection": {
+      "title": "Detection",
+      "description": "Network intrusion detection result",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "verdict": { "type": "string", "enum": ["ATTACK", "NORMAL"] },
+        "confidence": { "type": "number" },
+        "inputMode": { "type": "string" },
+        "topFeaturesJson": { "type": "string" },
+        "features": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "engine": { "type": "string" },
+        "filename": { "type": "string" },
+        "totalRecords": { "type": "integer" },
+        "attackCount": { "type": "integer" },
+        "normalCount": { "type": "integer" }
+      },
+      "required": ["userId", "verdict", "confidence", "createdAt"]
+    },
+    "ApiKey": {
+      "title": "ApiKey",
+      "description": "User API keys for external access",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "keyName": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "keyName", "apiKey", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/detections/{detectionId}": {
+      "schema": "Detection",
+      "description": "Scan results"
+    },
+    "/apiKeys/{keyId}": {
+      "schema": "ApiKey",
+      "description": "User API keys"
+    }
+  }
+}
