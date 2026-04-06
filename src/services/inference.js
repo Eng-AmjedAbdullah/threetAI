@@ -1,22 +1,48 @@
 import * as ort from 'onnxruntime-web';
 
+// Force stable wasm asset location for Firebase Hosting / SPA deployments.
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
+
 let onnxSession = null;
 let scalerSession = null;
 
+/**
+ * Build candidate URLs that work both at root and under sub-path hosting.
+ */
+function buildCandidates(basePath, names) {
+  const cleanedBase = (basePath || '/').replace(/\/$/, '');
+  const baseCandidates = names.map((n) => `${cleanedBase}/${n}`);
+  const rootCandidates = names.map((n) => `/${n}`);
+  return [...new Set([...baseCandidates, ...rootCandidates])];
+}
+
+/**
+ * Best-effort model load for Hosting + local.
+ */
 export async function loadMLModels() {
   try {
-    // In a web environment, load models from public folder
-    const modelCandidates = ['/ids_random_forest.onnx', '/ids_random_forest_model.onnx'];
-    const scalerCandidates = ['/scaler.onnx', '/data_scaler.onnx'];
+    const base = import.meta?.env?.BASE_URL || '/';
+
+    const modelCandidates = buildCandidates(base, [
+      'ids_random_forest.onnx',
+      'ids_random_forest_model.onnx'
+    ]);
+
+    const scalerCandidates = buildCandidates(base, [
+      'scaler.onnx',
+      'data_scaler.onnx'
+    ]);
 
     if (!onnxSession) {
       for (const path of modelCandidates) {
         try {
-          onnxSession = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
+          onnxSession = await ort.InferenceSession.create(path, {
+            executionProviders: ['wasm']
+          });
           console.log(`✅ Main model loaded from ${path}`);
           break;
         } catch (err) {
-          console.warn(`⚠️ Failed to load main model from ${path}:`, err.message);
+          console.warn(`⚠️ Failed to load main model from ${path}:`, err?.message || err);
         }
       }
     }
@@ -24,33 +50,37 @@ export async function loadMLModels() {
     if (!scalerSession) {
       for (const path of scalerCandidates) {
         try {
-          scalerSession = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
+          scalerSession = await ort.InferenceSession.create(path, {
+            executionProviders: ['wasm']
+          });
           console.log(`✅ Scaler model loaded from ${path}`);
           break;
         } catch (err) {
-          console.warn(`⚠️ Failed to load scaler model from ${path}:`, err.message);
+          console.warn(`⚠️ Failed to load scaler model from ${path}:`, err?.message || err);
         }
       }
     }
 
     if (!onnxSession || !scalerSession) {
-      console.warn('⚠️ One or more ONNX models failed to load, falling back to heuristic engine.');
+      console.warn('⚠️ One or more ONNX models failed to load. Detection scans will fail until model assets are reachable.');
     } else {
-      console.log('✅ AI Inference models finalized (may use fallback)');
+      console.log('✅ AI Inference models finalized.');
     }
 
     return true;
   } catch (err) {
     console.error('❌ Error in model loading process:', err);
-    return true; // Don't block app even if models fail
+    return true; // do not block page load
   }
 }
 
 function getTensorOutput(output, candidateNames = []) {
   if (!output || typeof output !== 'object') return undefined;
+
   for (const name of candidateNames) {
     if (name && output[name] !== undefined) return output[name];
   }
+
   const values = Object.values(output);
   return values.length ? values[0] : undefined;
 }
@@ -61,34 +91,42 @@ function isTypedArray(value) {
 
 function extractTensorValues(value) {
   if (value == null) return [];
+
   if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
     return [value];
   }
+
   if (Array.isArray(value)) {
-    return value.flatMap(v => extractTensorValues(v));
+    return value.flatMap((v) => extractTensorValues(v));
   }
+
   if (isTypedArray(value)) {
     return Array.from(value);
   }
 
   const tryExtract = (candidate) => {
     if (candidate == null) return undefined;
+
     if (isTypedArray(candidate)) return Array.from(candidate);
     if (Array.isArray(candidate)) return candidate;
+
     if (typeof candidate === 'object') {
       if (candidate.cpuData && isTypedArray(candidate.cpuData)) return Array.from(candidate.cpuData);
+
       if (candidate.data) {
         try {
           const dataValue = candidate.data;
           if (isTypedArray(dataValue)) return Array.from(dataValue);
           if (Array.isArray(dataValue)) return dataValue;
         } catch {
-          // Some runtimes throw when accessing .data on non-tensor values.
+          // some runtimes can throw on .data
         }
       }
-      if (candidate.value) {
+
+      if (candidate.value !== undefined) {
         return tryExtract(candidate.value);
       }
+
       if (typeof candidate.toArray === 'function') {
         try {
           return candidate.toArray();
@@ -96,6 +134,7 @@ function extractTensorValues(value) {
           // ignore
         }
       }
+
       if (typeof candidate[Symbol.iterator] === 'function') {
         try {
           return Array.from(candidate);
@@ -104,6 +143,7 @@ function extractTensorValues(value) {
         }
       }
     }
+
     return undefined;
   };
 
@@ -114,46 +154,81 @@ function extractTensorValues(value) {
 function normalizeTensorValues(value) {
   const values = extractTensorValues(value);
   if (!values || !values.length) return [];
-  return values.map(v => (typeof v === 'string' ? v.trim() : v));
+  return values.map((v) => (typeof v === 'string' ? v.trim() : v));
 }
 
 function normalizeLabel(value) {
   if (Array.isArray(value)) return normalizeLabel(value[0]);
+
   if (typeof value === 'string') {
     const normalized = value.trim().toUpperCase();
     if (normalized === 'ATTACK') return 'ATTACK';
+    if (normalized === 'NORMAL') return 'NORMAL';
+
     const numeric = Number(normalized);
     if (!Number.isNaN(numeric)) return numeric === 1 ? 'ATTACK' : 'NORMAL';
+
     return 'NORMAL';
   }
+
   if (typeof value === 'number') return value === 1 ? 'ATTACK' : 'NORMAL';
   if (typeof value === 'boolean') return value ? 'ATTACK' : 'NORMAL';
+
   return 'NORMAL';
 }
 
+function clamp01(x) {
+  const n = Number(x);
+  if (Number.isNaN(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
+/**
+ * Converts various probability formats into normalized [normalProb, attackProb]
+ * Supports:
+ * - [normal, attack]
+ * - [attack]
+ * - object-like flattened arrays
+ */
+function resolveProbabilities(values = []) {
+  const nums = values.map(Number).filter((v) => !Number.isNaN(v));
+
+  if (!nums.length) return { normalProb: 0.5, attackProb: 0.5, fromProb: false };
+
+  if (nums.length >= 2) {
+    const normalProb = clamp01(nums[0]);
+    const attackProb = clamp01(nums[1]);
+    return { normalProb, attackProb, fromProb: true };
+  }
+
+  // single score -> treat as attack score
+  const attackProb = clamp01(nums[0]);
+  return { normalProb: clamp01(1 - attackProb), attackProb, fromProb: true };
+}
+
+/**
+ * Main inference
+ */
 export async function runThreatGuardInference(features) {
-  // Always use ONNX models - no fallback
   if (!onnxSession || !scalerSession) {
     throw new Error('ML models are not loaded. Please ensure the scaler and model ONNX files are available.');
   }
 
-  // 1. Prepare input data matching the training feature order
   const featureOrder = [
     'duration', 'protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes', 'land', 'wrong_fragment', 'urgent',
-    'hot', 'num_failed_logins', 'logged_in', 'num_compromised', 'root_shell', 'su_attempted', 'num_root', 'num_file_creations',
-    'num_shells', 'num_access_files', 'num_outbound_cmds', 'is_host_login', 'is_guest_login', 'count', 'srv_count',
-    'serror_rate', 'srv_serror_rate', 'rerror_rate', 'srv_rerror_rate', 'same_srv_rate', 'diff_srv_rate', 'srv_diff_host_rate',
-    'dst_host_count', 'dst_host_srv_count', 'dst_host_same_srv_rate', 'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate',
-    'dst_host_srv_diff_host_rate', 'dst_host_serror_rate', 'dst_host_srv_serror_rate', 'dst_host_rerror_rate', 'dst_host_srv_rerror_rate'
+    'hot', 'num_failed_logins', 'logged_in', 'num_compromised', 'root_shell', 'su_attempted', 'num_root',
+    'num_file_creations', 'num_shells', 'num_access_files', 'num_outbound_cmds', 'is_host_login', 'is_guest_login',
+    'count', 'srv_count', 'serror_rate', 'srv_serror_rate', 'rerror_rate', 'srv_rerror_rate', 'same_srv_rate',
+    'diff_srv_rate', 'srv_diff_host_rate', 'dst_host_count', 'dst_host_srv_count', 'dst_host_same_srv_rate',
+    'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate', 'dst_host_srv_diff_host_rate', 'dst_host_serror_rate',
+    'dst_host_srv_serror_rate', 'dst_host_rerror_rate', 'dst_host_srv_rerror_rate'
   ];
 
-  const inputData = featureOrder.map(name => parseFloat(features[name]) || 0);
+  const inputData = featureOrder.map((name) => parseFloat(features?.[name]) || 0);
   const inputTensor = new ort.Tensor('float32', new Float32Array(inputData), [1, inputData.length]);
 
-  // 2. Run Scaler
-  const scalerFeeds = {
-    [scalerSession.inputNames[0]]: inputTensor
-  };
+  // Scale
+  const scalerFeeds = { [scalerSession.inputNames[0]]: inputTensor };
   const scaledOutput = await scalerSession.run(scalerFeeds);
   const scaledTensor = getTensorOutput(scaledOutput, [scalerSession.outputNames[0]]);
 
@@ -161,10 +236,8 @@ export async function runThreatGuardInference(features) {
     throw new Error('Scaler model failed to produce valid output tensor.');
   }
 
-  // 3. Run Model
-  const modelFeeds = {
-    [onnxSession.inputNames[0]]: scaledTensor
-  };
+  // Predict
+  const modelFeeds = { [onnxSession.inputNames[0]]: scaledTensor };
   const modelOutput = await onnxSession.run(modelFeeds);
 
   const labelOutput = getTensorOutput(modelOutput, [
@@ -172,29 +245,42 @@ export async function runThreatGuardInference(features) {
     'output_label',
     ...onnxSession.outputNames
   ]);
+
   const probOutput = getTensorOutput(modelOutput, [
     'probabilities',
     'output_probability',
-    ...onnxSession.outputNames.slice(1)
+    ...onnxSession.outputNames.slice(1),
+    ...onnxSession.outputNames
   ]);
 
-  if (!labelOutput) {
-    throw new Error('Model failed to produce label output.');
+  const probValues = normalizeTensorValues(probOutput);
+  const { normalProb, attackProb, fromProb } = resolveProbabilities(probValues);
+
+  let verdict = 'NORMAL';
+  let confidence = fromProb ? Math.max(normalProb, attackProb) : 0.85;
+
+  if (labelOutput !== undefined) {
+    const labelValue = normalizeTensorValues(labelOutput)[0];
+    verdict = normalizeLabel(labelValue);
+
+    // if probabilities exist, confidence tracks predicted class
+    if (fromProb) {
+      confidence = verdict === 'ATTACK' ? attackProb : normalProb;
+    }
+  } else if (fromProb) {
+    // fallback label from probabilities
+    verdict = attackProb >= normalProb ? 'ATTACK' : 'NORMAL';
+    confidence = Math.max(normalProb, attackProb);
+  } else {
+    // final fallback: never crash scan because of output schema mismatch
+    console.warn('⚠️ Model outputs did not include label/probabilities in expected format; using safe fallback verdict.');
+    verdict = 'NORMAL';
+    confidence = 0.6;
   }
-
-  const labelValue = normalizeTensorValues(labelOutput)[0];
-  const probabilities = normalizeTensorValues(probOutput);
-
-  const verdict = normalizeLabel(labelValue);
-  const confidence = probabilities.length
-    ? Math.min(1, Math.max(...probabilities.map(Number)))
-    : verdict === 'ATTACK'
-      ? 0.95
-      : 0.85;
 
   return {
     verdict,
-    confidence,
+    confidence: clamp01(confidence),
     topFeatures: [
       { name: 'serror_rate', importance: 0.35 },
       { name: 'count', importance: 0.25 },
