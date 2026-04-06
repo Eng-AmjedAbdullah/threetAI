@@ -175,7 +175,15 @@ export async function detectSingle(features, token) {
     
     return { ...result, detection: saved };
   } catch (error) {
-    if (error.title) throw error;
+    if (error?.title) throw error;
+
+    // Preserve low-level inference/runtime error details for troubleshooting scans.
+    if (error?.message) {
+      const err = new Error(error.message);
+      err.title = 'Detection Failed';
+      throw err;
+    }
+
     const errorMsg = getErrorMessage(error);
     const err = new Error(errorMsg.message);
     err.title = errorMsg.title;
@@ -232,7 +240,14 @@ export async function detectBatch(records, filename, token) {
     
     return { ...summary, detection: saved };
   } catch (error) {
-    if (error.title) throw error;
+    if (error?.title) throw error;
+
+    if (error?.message) {
+      const err = new Error(error.message);
+      err.title = 'Batch Analysis Failed';
+      throw err;
+    }
+
     const errorMsg = getErrorMessage(error);
     const err = new Error(errorMsg.message);
     err.title = errorMsg.title;

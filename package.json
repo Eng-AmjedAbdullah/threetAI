@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "check:predeploy": "node scripts/predeploy-check.mjs",
+    "test:deep": "npm run lint && npm run check:predeploy && npm run build",
+    "deploy:hosting": "npm run test:deep && npx firebase-tools deploy --only hosting"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",

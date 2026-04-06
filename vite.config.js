@@ -10,5 +10,20 @@ export default defineConfig({
     fs: {
       allow: ['..']
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/database'],
+          charts: ['recharts', 'd3', 'topojson-client'],
+          pdf: ['jspdf', 'jspdf-autotable', 'html2canvas'],
+          motion: ['framer-motion', 'motion'],
+          onnx: ['onnxruntime-web']
+        }
+      }
+    }
   }
 })

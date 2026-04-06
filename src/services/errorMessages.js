@@ -72,6 +72,16 @@ export const firebaseErrorMessages = {
     title: 'Authentication Required'
   },
 
+  // Realtime Database Errors
+  'database/permission-denied': {
+    message: 'You do not have permission to read or write this data.',
+    title: 'Access Denied'
+  },
+  'database/network-error': {
+    message: 'A network error occurred while contacting the database. Please check your connection and try again.',
+    title: 'Connection Error'
+  },
+
   // Generic/Default Errors
   'default': {
     message: 'An unexpected error occurred. Please try again or contact support if the problem persists.',
@@ -110,7 +120,14 @@ export function getErrorMessage(error) {
     }
   }
 
-  // If no match found, return default with original error message appended
+  // If no mapping is found, preserve the original message when available.
+  if (originalMessage && String(originalMessage).trim()) {
+    return {
+      message: String(originalMessage).replace(/^Error:\s*/i, ''),
+      title: 'Error'
+    };
+  }
+
   return {
     message: firebaseErrorMessages['default'].message,
     title: firebaseErrorMessages['default'].title
