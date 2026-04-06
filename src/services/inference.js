@@ -37,7 +37,7 @@ export async function loadMLModels() {
     }
 
     if (!onnxSession || !scalerSession) {
-      console.warn('⚠️ One or more ONNX models failed to load, falling back to heuristic engine.');
+      console.warn('⚠️ One or more ONNX models failed to load. Detection scans will fail until model assets are reachable.');
     } else {
       console.log('✅ AI Inference models finalized (may use fallback)');
     }
