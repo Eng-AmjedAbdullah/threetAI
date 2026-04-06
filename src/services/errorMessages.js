@@ -72,6 +72,16 @@ export const firebaseErrorMessages = {
     title: 'Authentication Required'
   },
 
+  // Realtime Database Errors
+  'database/permission-denied': {
+    message: 'You do not have permission to read or write this data.',
+    title: 'Access Denied'
+  },
+  'database/network-error': {
+    message: 'A network error occurred while contacting the database. Please check your connection and try again.',
+    title: 'Connection Error'
+  },
+
   // Generic/Default Errors
   'default': {
     message: 'An unexpected error occurred. Please try again or contact support if the problem persists.',
@@ -102,18 +112,26 @@ export function getErrorMessage(error) {
     return firebaseErrorMessages[code];
   }
 
-  // Try partial match (for codes like "ERROR_USER_NOT_FOUND" style errors)
+  // Try partial match
   const normalizedCode = code.toLowerCase();
   for (const [errorCode, errorMsg] of Object.entries(firebaseErrorMessages)) {
-    if (normalizedCode.includes(errorCode.split('/')[1])) {
+    const segment = errorCode.includes('/') ? errorCode.split('/')[1] : errorCode;
+    if (normalizedCode.includes(segment)) {
       return errorMsg;
     }
   }
 
-  // If no match found, return default with original error message appended
+  // Preserve original runtime error if available
+  if (originalMessage && String(originalMessage).trim()) {
+    return {
+      message: String(originalMessage).replace(/^Error:\s*/i, ''),
+      title: 'Error'
+    };
+  }
+
   return {
-    message: firebaseErrorMessages['default'].message,
-    title: firebaseErrorMessages['default'].title
+    message: firebaseErrorMessages.default.message,
+    title: firebaseErrorMessages.default.title
   };
 }
 
